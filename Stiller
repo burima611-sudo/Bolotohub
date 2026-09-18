@@ -1,0 +1,268 @@
+-- ROCKET | Lost Front Mobile Aimbot + ESP
+-- Команда Rocket Way | 20.05.2026
+-- Для Delta / Arceus X / Fluxus Mobile / Hydrogen
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local Camera = Workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ================== НАСТРОЙКИ ПОД LOST FRONT ==================
+local Config = {
+    Aimbot = {
+        Enabled = true,
+        FOV = 180,
+        Smoothness = 0.18,
+        TargetPart = "Head",
+        VisibleCheck = false,   -- в Lost Front стены тонкие, часто мешает
+        TeamCheck = true,
+        AutoFire = true,        -- Lost Front стреляет через tool:Activate()
+        FireDelay = 0.12,       -- задержка между выстрелами
+    },
+    ESP = {
+        Enabled = true,
+        Box = true,
+        Name = true,
+        Distance = true,
+        Health = true,
+        Tracer = true,
+        Color = Color3.fromRGB(255, 40, 40),
+        TeamColor = true,
+    }
+}
+
+local aimbotActive = false
+local lastFire = 0
+
+-- ================== УТИЛИТЫ ==================
+local function getTeamColor(plr)
+    if plr.Team then return plr.Team.TeamColor.Color end
+    return Color3.fromRGB(255, 255, 255)
+end
+
+local function isAlly(plr)
+    if not Config.Aimbot.TeamCheck then return false end
+    return plr.Team == LocalPlayer.Team
+end
+
+local function getTargetPart(character)
+    return character:FindFirstChild(Config.Aimbot.TargetPart)
+        or character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+-- ================== UI (мобильные кнопки) ==================
+local sg = Instance.new("ScreenGui")
+sg.Name = "ROCKET_LostFront"
+sg.ResetOnSpawn = false
+sg.IgnoreGuiInset = true
+sg.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local function makeButton(text, pos, size)
+    local b = Instance.new("TextButton")
+    b.Size = size or UDim2.new(0, 95, 0, 42)
+    b.Position = pos
+    b.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    b.BackgroundTransparency = 0.2
+    b.TextColor3 = Color3.fromRGB(0, 255, 120)
+    b.Text = text
+    b.Font = Enum.Font.Code
+    b.TextSize = 14
+    b.Parent = sg
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = b
+    return b
+end
+
+local aimBtn = makeButton("AIM: ON", UDim2.new(0, 15, 0.5, -22))
+local espBtn = makeButton("ESP: ON", UDim2.new(0, 15, 0.5, 26))
+local lockBtn = makeButton("LOCK",   UDim2.new(0, 120, 0.5, -22), UDim2.new(0, 95, 0, 42))
+
+aimBtn.MouseButton1Click:Connect(function()
+    Config.Aimbot.Enabled = not Config.Aimbot.Enabled
+    aimBtn.Text = "AIM: " .. (Config.Aimbot.Enabled and "ON" or "OFF")
+end)
+
+espBtn.MouseButton1Click:Connect(function()
+    Config.ESP.Enabled = not Config.ESP.Enabled
+    espBtn.Text = "ESP: " .. (Config.ESP.Enabled and "ON" or "OFF")
+end)
+
+lockBtn.MouseButton1Down:Connect(function() aimbotActive = true end)
+lockBtn.MouseButton1Up:Connect(function() aimbotActive = false end)
+lockBtn.MouseLeave:Connect(function() aimbotActive = false end)
+
+-- Тап по экрану тоже держит аимбот
+UserInputService.TouchStarted:Connect(function() aimbotActive = true end)
+UserInputService.TouchEnded:Connect(function()
+    if not lockBtn:IsMouseButtonDown() then aimbotActive = false end
+end)
+
+-- ================== AIMBOT ==================
+local function getClosestTarget()
+    local closest, closestDist = nil, Config.Aimbot.FOV
+    local center = Camera.ViewportSize / 2
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr == LocalPlayer then continue end
+        if isAlly(plr) then continue end
+        local char = plr.Character
+        if not char then continue end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local part = getTargetPart(char)
+        if not part then continue end
+
+        local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+        if not onScreen then continue end
+
+        local dist = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closest = part
+        end
+    end
+    return closest
+end
+
+RunService.RenderStepped:Connect(function()
+    if not Config.Aimbot.Enabled or not aimbotActive then return end
+    local target = getClosestTarget()
+    if not target then return end
+
+    local camPos = Camera.CFrame.Position
+    local newCF = CFrame.new(camPos, target.Position)
+    Camera.CFrame = Camera.CFrame:Lerp(newCF, 1 - Config.Aimbot.Smoothness)
+
+    -- Авто-выстрел через Tool:Activate() (в Lost Front работает)
+    if Config.Aimbot.AutoFire and tick() - lastFire > Config.Aimbot.FireDelay then
+        local char = LocalPlayer.Character
+        if char then
+            local tool = char:FindFirstChildOfClass("Tool")
+            if tool then
+                pcall(function() tool:Activate() end)
+                lastFire = tick()
+            end
+        end
+    end
+end)
+
+-- ================== ESP ==================
+local espObjects = {}
+
+local function createESP(plr)
+    if plr == LocalPlayer then return end
+
+    local box = Drawing.new("Square")
+    box.Thickness = 1
+    box.Filled = false
+    box.Transparency = 1
+    box.Visible = false
+
+    local name = Drawing.new("Text")
+    name.Size = 14
+    name.Center = true
+    name.Outline = true
+    name.Color = Color3.fromRGB(255, 255, 255)
+    name.Visible = false
+
+    local dist = Drawing.new("Text")
+    dist.Size = 12
+    dist.Center = true
+    dist.Outline = true
+    dist.Color = Color3.fromRGB(200, 200, 200)
+    dist.Visible = false
+
+    local health = Drawing.new("Text")
+    health.Size = 12
+    health.Center = true
+    health.Outline = true
+    health.Visible = false
+
+    local tracer = Drawing.new("Line")
+    tracer.Thickness = 1
+    tracer.Visible = false
+
+    espObjects[plr] = {box=box, name=name, dist=dist, health=health, tracer=tracer}
+end
+
+local function removeESP(plr)
+    local o = espObjects[plr]
+    if not o then return end
+    for _, v in pairs(o) do v:Remove() end
+    espObjects[plr] = nil
+end
+
+for _, plr in ipairs(Players:GetPlayers()) do createESP(plr) end
+Players.PlayerAdded:Connect(createESP)
+Players.PlayerRemoving:Connect(removeESP)
+
+RunService.RenderStepped:Connect(function()
+    if not Config.ESP.Enabled then
+        for _, o in pairs(espObjects) do
+            for _, v in pairs(o) do v.Visible = false end
+        end
+        return
+    end
+
+    for plr, o in pairs(espObjects) do
+        local char = plr.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not hum or not root or hum.Health <= 0 then
+            for _, v in pairs(o) do v.Visible = false end
+            continue
+        end
+
+        local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
+        if not onScreen then
+            for _, v in pairs(o) do v.Visible = false end
+            continue
+        end
+
+        local head = char:FindFirstChild("Head")
+        local headPos = head and Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        local legPos = Camera:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+        local color = Config.ESP.TeamColor and getTeamColor(plr) or Config.ESP.Color
+
+        if Config.ESP.Box and headPos then
+            local h = math.abs(headPos.Y - legPos.Y)
+            local w = h / 2
+            o.box.Size = Vector2.new(w, h)
+            o.box.Position = Vector2.new(pos.X - w/2, pos.Y - h/2)
+            o.box.Color = color
+            o.box.Visible = true
+        else o.box.Visible = false end
+
+        if Config.ESP.Name then
+            o.name.Text = plr.Name
+            o.name.Position = Vector2.new(pos.X, pos.Y - 42)
+            o.name.Visible = true
+        else o.name.Visible = false end
+
+        if Config.ESP.Distance then
+            local d = (Camera.CFrame.Position - root.Position).Magnitude
+            o.dist.Text = string.format("[%dm]", math.floor(d))
+            o.dist.Position = Vector2.new(pos.X, pos.Y + 20)
+            o.dist.Visible = true
+        else o.dist.Visible = false end
+
+        if Config.ESP.Health then
+            o.health.Text = string.format("%d HP", math.floor(hum.Health))
+            o.health.Color = Color3.fromRGB(255 - hum.Health*2.55, hum.Health*2.55, 0)
+            o.health.Position = Vector2.new(pos.X, pos.Y + 36)
+            o.health.Visible = true
+        else o.health.Visible = false end
+
+        if Config.ESP.Tracer then
+            o.tracer.From = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+            o.tracer.To = Vector2.new(pos.X, pos.Y)
+            o.tracer.Color = color
+            o.tracer.Visible = true
+        else o.tracer.Visible = false end
+    end
+end)
